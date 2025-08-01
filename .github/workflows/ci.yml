@@ -25,7 +25,7 @@ jobs:
 
       - name: Install deps
         run: |
-          poetry install --no-interaction --no-root
+          poetry install --no-interaction --with dev
 
       - name: Lint & type-check
         run: |
