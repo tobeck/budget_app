@@ -46,13 +46,17 @@ def add_transactions(session: Session, df: pd.DataFrame) -> int:  # noqa: D401 (
     new_rows: list[Transaction] = []
 
     for row in df.itertuples(index=False):
-        tx_hash = Transaction.calc_hash(
-            row.account_id,
-            str(row.date.date()),
-            row.payee,
-            row.amount,
-            row.currency,
+        account_id: str = str(row.account_id)
+        date_iso: str = (
+            row.date.date().isoformat()
+            if isinstance(row.date, (pd.Timestamp | datetime))
+            else str(row.date)
         )
+        payee: str = str(row.payee)
+        amount: float = float(row.amount)
+        currency: str = str(row.currency)
+
+        tx_hash = Transaction.calc_hash(account_id, date_iso, payee, amount, currency)
         if tx_hash in existing_hashes:
             continue  # duplicate
         existing_hashes.add(tx_hash)
@@ -66,10 +70,10 @@ def add_transactions(session: Session, df: pd.DataFrame) -> int:  # noqa: D401 (
         new_rows.append(
             Transaction(
                 account=account,
-                date=row.date.date(),
-                payee=row.payee,
-                amount=row.amount,
-                currency=row.currency,
+                date=datetime.fromisoformat(date_iso).date(),
+                payee=payee,
+                amount=amount,
+                currency=currency,
                 tx_hash=tx_hash,
                 raw=clean_raw,
             )
