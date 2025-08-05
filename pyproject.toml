@@ -34,6 +34,8 @@ mypy = "^1.17.1"
 pre-commit = "^4.2.0"
 alembic = "^1.16.4"
 pandas-stubs = "^2.3.0.250703"
+pydantic = {extras = ["mypy"], version = "^2.11.7"}
+pydantic-settings = "^2"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -56,4 +58,7 @@ explicit_package_bases = true
 mypy_path = "src"
 files = ["src"]
 ignore_missing_imports = true      # silence pandas / typer stubs
+plugins = [
+    "sqlalchemy.ext.mypy.plugin",
+]
 allow_untyped_decorators = true    # accept Typers @app.command
