@@ -4,8 +4,8 @@
 """Service: insert a canonical DataFrame into the DB with dedup."""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Final
+from datetime import date, datetime
+from typing import Any, Final, cast
 
 import pandas as pd
 from sqlalchemy import select
@@ -17,60 +17,65 @@ REQUIRED_COLS: Final = {"date", "payee", "amount", "currency", "account_id"}
 
 
 def _json_safe(value: Any) -> Any:
-    """Convert non‑JSON‑serialisable values (Timestamp/Datetime) to ISO strings."""
-    if isinstance(value, (pd.Timestamp | datetime)):
+    """Convert non-JSON-serialisable values to JSON-friendly primitives."""
+    if isinstance(value, (pd.Timestamp, datetime, date)):  # noqa: UP038
+        # date has .isoformat too and is JSON-friendly as a string
         return value.isoformat()
     return value
 
 
-def add_transactions(session: Session, df: pd.DataFrame) -> int:  # noqa: D401 (imperative)
-    """Insert rows from *df* into *session*, skipping duplicates.
+def _coerce_date(value: Any) -> date:
+    """Coerce mixed date-like values into a `datetime.date`."""
+    if isinstance(value, pd.Timestamp):
+        return cast(date, value.date())
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value).date()
+    # Fallback for numpy.datetime64 / other scalars:
+    ts = cast(pd.Timestamp, pd.to_datetime(value))
+    return cast(date, ts.date())
 
-    *Deduping logic*
-    ----------------
-    • We `flush()` once so hashes of rows previously added in the same Session
-      are visible to our in‑memory hash set.
-    • We query **all** existing hashes in one round‑trip, then do O(1) look‑ups
-      per row instead of N extra SELECTs.
 
-    Returns the number of *new* `Transaction` objects attached to the session.
-    """
+def add_transactions(session: Session, df: pd.DataFrame) -> int:  # noqa: D401
+    """Insert *df* into *session*, skipping rows whose hash already exists."""
     missing = REQUIRED_COLS - set(df.columns)
     if missing:
         raise ValueError(f"DataFrame missing required columns: {missing}")
 
-    session.flush()
+    session.flush()  # make unflushed inserts visible to our SELECT
 
     existing_hashes: set[str] = {h for (h,) in session.execute(select(Transaction.tx_hash))}
-
     new_rows: list[Transaction] = []
 
-    for row in df.itertuples(index=False):
-        account_id: str = str(row.account_id)
-        date_iso: str = (
-            row.date.date().isoformat()
-            if isinstance(row.date, (pd.Timestamp | datetime))
-            else str(row.date)
-        )
-        payee: str = str(row.payee)
-        amount: float = float(row.amount)
-        currency: str = str(row.currency)
+    # Iterate with well-typed dicts instead of itertuples() to avoid giant unions
+    for rec in df.to_dict(orient="records"):
+        account_id = str(rec["account_id"])
+        date_obj = _coerce_date(rec["date"])
+        date_iso = date_obj.isoformat()
+        payee = str(rec["payee"])
+        amount = float(rec["amount"])
+        currency = str(rec["currency"])
 
         tx_hash = Transaction.calc_hash(account_id, date_iso, payee, amount, currency)
         if tx_hash in existing_hashes:
-            continue  # duplicate
+            continue
         existing_hashes.add(tx_hash)
 
         account = Account.get_or_create(
-            session=session, account_id=row.account_id, currency=row.currency
+            session=session,
+            account_id=account_id,
+            currency=currency,
         )
 
-        clean_raw = {k: _json_safe(v) for k, v in row._asdict().items()}
+        clean_raw = {k: _json_safe(v) for k, v in rec.items()}
 
         new_rows.append(
             Transaction(
                 account=account,
-                date=datetime.fromisoformat(date_iso).date(),
+                date=date_obj,
                 payee=payee,
                 amount=amount,
                 currency=currency,
